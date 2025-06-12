@@ -16,14 +16,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Configurar session para evitar bloqueos
-@st.cache_resource
-def get_session():
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
-    return session
+# Configurar headers para evitar bloqueos (alternativa)
+def configurar_yfinance():
+    """Configura yfinance para evitar bloqueos"""
+    import yfinance as yf
+    # yfinance usa requests internamente, podemos intentar configurar user agent
+    pass
 
 # Lista completa de acciones
 ACCIONES = [
@@ -57,9 +55,8 @@ ACCIONES = [
 
 # Función optimizada para descargar datos en lotes
 @st.cache_data(ttl=300)  # Cache por 5 minutos
-def descargar_datos_lotes(simbolos, lote_size=30):
+def descargar_datos_lotes(simbolos, lote_size=25):
     """Descarga datos en lotes para evitar saturar la conexión"""
-    session = get_session()
     datos_completos = {}
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -72,17 +69,16 @@ def descargar_datos_lotes(simbolos, lote_size=30):
         try:
             status_text.text(f'Descargando lote {i+1} de {total_lotes}... ({len(lote)} acciones)')
             
-            # Descargar con timeout y retry
+            # Descargar sin session parameter
             data = yf.download(
                 lote, 
-                period="5d",  # Usar menos días para ser más rápido
+                period="5d",
                 interval="1d",
                 group_by='ticker',
                 auto_adjust=True,
-                prepost=True,
-                threads=True,
-                session=session,
-                timeout=20
+                prepost=False,
+                threads=False,  # Evitar problemas de concurrencia
+                progress=False
             )
             
             if not data.empty:
@@ -90,16 +86,21 @@ def descargar_datos_lotes(simbolos, lote_size=30):
                 if len(lote) == 1:
                     datos_completos[lote[0]] = data
                 else:
-                    # Múltiples acciones
-                    for simbolo in lote:
-                        if simbolo in data.columns.levels[0]:
-                            datos_completos[simbolo] = data[simbolo]
+                    # Múltiples acciones - verificar estructura
+                    if hasattr(data.columns, 'levels'):
+                        # MultiIndex columns
+                        for simbolo in lote:
+                            if simbolo in data.columns.levels[0]:
+                                datos_completos[simbolo] = data[simbolo]
+                    else:
+                        # Single level columns (una sola acción)
+                        datos_completos[lote[0]] = data
             
             # Actualizar progress bar
             progress_bar.progress((i + 1) / total_lotes)
             
             # Pausa entre lotes para evitar rate limiting
-            time.sleep(0.5)
+            time.sleep(1)
             
         except Exception as e:
             st.warning(f"Error en lote {i+1}: {str(e)[:100]}...")
